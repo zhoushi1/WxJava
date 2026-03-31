@@ -112,6 +112,8 @@ public abstract class BaseWxMaServiceImpl<H, P> implements WxMaService, RequestH
   private final WxMaSchemeService schemeService = new WxMaSchemeServiceImpl(this);
   private final WxMaAnalysisService analysisService = new WxMaAnalysisServiceImpl(this);
   private final WxMaCodeService codeService = new WxMaCodeServiceImpl(this);
+  private final WxMaCustomserviceWorkService customserviceWorkService = new WxMaCustomserviceWorkServiceImpl(this);
+  private final WxMaKefuService maKefuService = new WxMaKefuServiceImpl(this);
   private final WxMaInternetService internetService = new WxMaInternetServiceImpl(this);
   private final WxMaSettingService settingService = new WxMaSettingServiceImpl(this);
   private final WxMaJsapiService jsapiService = new WxMaJsapiServiceImpl(this);
@@ -164,6 +166,10 @@ public abstract class BaseWxMaServiceImpl<H, P> implements WxMaService, RequestH
       new WxMaExpressDeliveryReturnServiceImpl(this);
   private final WxMaPromotionService wxMaPromotionService = new WxMaPromotionServiceImpl(this);
   private final WxMaIntracityService intracityService = new WxMaIntracityServiceImpl(this);
+  private final WxMaComplaintService complaintService = new WxMaComplaintServiceImpl(this);
+  private final WxMaEmployeeRelationService employeeRelationService =
+      new WxMaEmployeeRelationServiceImpl(this);
+  private final WxMaFaceService faceService = new WxMaFaceServiceImpl(this);
 
   private Map<String, WxMaConfig> configMap = new HashMap<>();
   private int retrySleepMillis = 1000;
@@ -424,8 +430,9 @@ public abstract class BaseWxMaServiceImpl<H, P> implements WxMaService, RequestH
     }
     String accessToken = getAccessToken(false);
 
-    if (StringUtils.isNotEmpty(this.getWxMaConfig().getApiHostUrl())) {
-      uri = uri.replace("https://api.weixin.qq.com", this.getWxMaConfig().getApiHostUrl());
+    String effectiveApiHostUrl = this.getWxMaConfig().getEffectiveApiHostUrl();
+    if (!WxMaConfig.DEFAULT_API_HOST_URL.equals(effectiveApiHostUrl)) {
+      uri = uri.replace(WxMaConfig.DEFAULT_API_HOST_URL, effectiveApiHostUrl);
     }
 
     String uriWithAccessToken =
@@ -649,6 +656,16 @@ public abstract class BaseWxMaServiceImpl<H, P> implements WxMaService, RequestH
   @Override
   public WxMaCodeService getCodeService() {
     return this.codeService;
+  }
+
+  @Override
+  public WxMaCustomserviceWorkService getCustomserviceWorkService() {
+    return this.customserviceWorkService;
+  }
+
+  @Override
+  public WxMaKefuService getKefuService() {
+    return this.maKefuService;
   }
 
   @Override
@@ -891,6 +908,29 @@ public abstract class BaseWxMaServiceImpl<H, P> implements WxMaService, RequestH
     return Base64.getEncoder().encodeToString(data);
   }
 
+  /**
+   * 构造 RSA 待签名串。
+   *
+   * <p>根据微信官方 API 签名规范，待签名串格式为：<br>
+   * {@code urlpath\nappid\ntimestamp\npostdata}<br>
+   * 字段之间使用换行符 {@code \n} 分隔，共 4 个字段，末尾无额外回车符。
+   *
+   * <p><b>注意：</b>RSA 私钥序列号（rsaKeySn）<b>不应</b>包含在待签名串中，它应通过请求头
+   * {@code Wechatmp-Serial} 传递。4.8.0 曾错误地将 rsaKeySn 插入签名串（产生 5 个字段），
+   * 导致所有走 API 签名路径的接口（包括 {@code getPhoneNumber}、同城配送等）返回 40234
+   * {@code invalid signature}。此方法明确使用 4 字段格式以确保签名正确。
+   *
+   * @param urlPath   当前请求 API 的 URL，不含 Query 参数
+   * @param appId     小程序 AppId
+   * @param timestamp 签名时的时间戳
+   * @param postData  加密后的请求 POST 数据（JSON 字符串）
+   * @return 拼接好的待签名串
+   * @see <a href="https://developers.weixin.qq.com/miniprogram/dev/OpenApiDoc/getting_started/api_signature.html">微信服务端API签名指南</a>
+   */
+  static String buildSignaturePayload(String urlPath, String appId, long timestamp, String postData) {
+    return urlPath + "\n" + appId + "\n" + timestamp + "\n" + postData;
+  }
+
   @Override
   public String postWithSignature(String url, JsonObject jsonObject) throws WxErrorException {
     long timestamp = System.currentTimeMillis() / 1000;
@@ -898,6 +938,10 @@ public abstract class BaseWxMaServiceImpl<H, P> implements WxMaService, RequestH
     String rndStr = UUID.randomUUID().toString().replace("-", "").substring(0, 30);
     String aesKey = this.getWxMaConfig().getApiSignatureAesKey();
     String aesKeySn = this.getWxMaConfig().getApiSignatureAesKeySn();
+    String rsaKeySn = this.getWxMaConfig().getApiSignatureRsaPrivateKeySn();
+    if (rsaKeySn == null || rsaKeySn.isEmpty()) {
+      throw new SecurityException("ApiSignatureRsaPrivateKeySn不能为空，请检查配置");
+    }
 
     jsonObject.addProperty("_n", rndStr);
     jsonObject.addProperty("_appid", appId);
@@ -941,8 +985,8 @@ public abstract class BaseWxMaServiceImpl<H, P> implements WxMaService, RequestH
       reqData.addProperty("authtag", base64Encode(authTag));
       String requestJson = reqData.toString();
 
-      // 计算签名 RSA
-      String payload = urlPath + "\n" + appId + "\n" + timestamp + "\n" + requestJson;
+      // 计算签名 RSA，待签名串格式：urlpath\nappid\ntimestamp\npostdata
+      String payload = buildSignaturePayload(urlPath, appId, timestamp, requestJson);
       byte[] dataBuffer = payload.getBytes(StandardCharsets.UTF_8);
       RSAPrivateKey priKey;
       try {
@@ -971,6 +1015,7 @@ public abstract class BaseWxMaServiceImpl<H, P> implements WxMaService, RequestH
       header.put("Wechatmp-Signature", signatureString);
       header.put("Wechatmp-Appid", appId);
       header.put("Wechatmp-TimeStamp", String.valueOf(timestamp));
+      header.put("Wechatmp-Serial", rsaKeySn);
       log.debug("发送请求uri:{}, headers:{}, postData:{}", url, header, requestJson);
       WxMaApiResponse response =
           this.execute(ApiSignaturePostRequestExecutor.create(this), url, header, requestJson);
@@ -1023,5 +1068,20 @@ public abstract class BaseWxMaServiceImpl<H, P> implements WxMaService, RequestH
   @Override
   public WxMaIntracityService getIntracityService() {
     return this.intracityService;
+  }
+
+  @Override
+  public WxMaComplaintService getComplaintService() {
+    return this.complaintService;
+  }
+
+  @Override
+  public WxMaEmployeeRelationService getEmployeeRelationService() {
+    return this.employeeRelationService;
+  }
+
+  @Override
+  public WxMaFaceService getFaceService() {
+    return this.faceService;
   }
 }

@@ -1,5 +1,6 @@
 package cn.binarywang.wx.miniapp.api;
 
+import cn.binarywang.wx.miniapp.bean.WxMaCode2VerifyInfoResult;
 import cn.binarywang.wx.miniapp.bean.WxMaJscode2SessionResult;
 import cn.binarywang.wx.miniapp.bean.WxMaPhoneNumberInfo;
 import cn.binarywang.wx.miniapp.bean.WxMaUserInfo;
@@ -59,6 +60,12 @@ public interface WxMaUserService {
   /**
    * 获取手机号信息,基础库:2.21.2及以上或2023年8月28日起
    *
+   * <p>若已配置 {@code apiSignatureAesKey} 及 {@code apiSignatureRsaPrivateKey} 开启服务端 API 签名，
+   * 该接口请求将自动走加密 + RSA 签名路径（见
+   * <a href="https://developers.weixin.qq.com/miniprogram/dev/OpenApiDoc/getting_started/api_signature.html">API签名文档</a>）。
+   * 签名串格式为 {@code urlpath\nappid\ntimestamp\npostdata}（4 个字段），
+   * RSA 私钥序列号通过请求头 {@code Wechatmp-Serial} 传递，不包含在签名串中。
+   *
    * @param code 每个code只能使用一次，code的有效期为5min。code获取方式参考<a href="https://developers.weixin.qq.com/miniprogram/dev/framework/open-ability/getPhoneNumber.html">手机号快速验证组件</a>
    * @return 用户手机号信息
    * @throws WxErrorException .
@@ -87,4 +94,18 @@ public interface WxMaUserService {
    * @return .
    */
   boolean checkUserInfo(String sessionKey, String rawData, String signature);
+
+  /**
+   * 多端登录验证接口.
+   * <p>
+   * 通过 code 换取用户登录态信息，用于多端登录场景（如手表端）。
+   * </p>
+   * 文档地址：<a href="https://developers.weixin.qq.com/miniprogram/dev/platform-capabilities/miniapp/openapi/code2Verifyinfo.html">多端登录</a>
+   *
+   * @param code      登录时获取的 code
+   * @param checkcode 手表授权页面返回的 checkcode
+   * @return 登录验证结果，包含 session_key、openid、unionid 和 is_limit 字段
+   * @throws WxErrorException 调用微信接口失败时抛出
+   */
+  WxMaCode2VerifyInfoResult getCode2VerifyInfo(String code, String checkcode) throws WxErrorException;
 }
